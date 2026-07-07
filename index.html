@@ -239,6 +239,37 @@
     color: var(--ink);
     min-width: 240px;
   }
+  /* OUT OF OFFICE (PTO) PANEL */
+  .ooo-panel {
+    background: var(--warn-bg);
+    border-left: 4px solid var(--warn);
+    margin: 14px 24px 0;
+    padding: 12px 18px;
+    border-radius: 4px;
+  }
+  .ooo-panel .title {
+    color: var(--warn);
+    font-weight: 700;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+  }
+  .ooo-empty { color: var(--ink-mute); font-size: 0.9rem; }
+  .ooo-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ooo-item {
+    background: var(--surface);
+    border: 1px solid rgba(180, 83, 9, 0.28);
+    border-radius: 5px;
+    padding: 5px 10px;
+    font-size: 0.88rem;
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+  }
+  .ooo-item .ooo-name { font-weight: 600; color: var(--ink); }
+  .ooo-item .ooo-range { color: var(--warn); font-size: 0.82rem; font-weight: 600; }
+  .ooo-item .ooo-reason { color: var(--ink-mute); font-size: 0.8rem; font-style: italic; }
   /* TEAM GRID */
   .team-grid {
     display: grid;
@@ -759,6 +790,7 @@
   </div>
   <div id="review-status" class="review-bar"></div>
   <div id="day-editlog" class="editlog"></div>
+  <div id="ooo-container"></div>
   <div id="plan-c-container"></div>
   <div class="team-grid" id="team-grid"></div>
   <div id="day-notes-wrap" class="notes-wrap">
@@ -1328,6 +1360,32 @@ function renderDayNotes() {
   ta.value = dayNotes[dateKey(currentDate)] || '';
 }
 
+// ---- Out of office (PTO) for the current day ----
+// Lists only people on a scheduled absence (PTO) covering the day — NOT regular
+// days off. Multi-day absences show the full date range they are out.
+function renderOutOfOffice() {
+  const container = document.getElementById('ooo-container');
+  if (!container) return;
+  const key = dateKey(currentDate);
+  const fmt = s => new Date(s + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const outToday = scheduledAbsences
+    .filter(a => key >= a.start && key <= a.end)
+    .sort((a, b) => a.person.localeCompare(b.person));
+  const itemsHTML = outToday.map(a => {
+    const range = a.start !== a.end ? `<span class="ooo-range">${fmt(a.start)} – ${fmt(a.end)}</span>` : '';
+    const reason = a.reason ? `<span class="ooo-reason">${a.reason}</span>` : '';
+    return `<div class="ooo-item"><span class="ooo-name">${a.person}</span>${range}${reason}</div>`;
+  }).join('');
+  container.innerHTML = `
+    <div class="ooo-panel">
+      <div class="title">Out of office — PTO</div>
+      ${outToday.length
+        ? `<div class="ooo-list">${itemsHTML}</div>`
+        : `<div class="ooo-empty">No one is out on PTO today.</div>`}
+    </div>
+  `;
+}
+
 // ---- Per-day edit log ----
 let editLogExpanded = false;
 function toggleEditLog() { editLogExpanded = !editLogExpanded; renderEditLog(); }
@@ -1788,11 +1846,13 @@ function renderDayView() {
   renderReviewStatus();
   renderDayNotes();
   renderEditLog();
+  renderOutOfOffice();
 
   if (di < 0) {
     document.getElementById('team-grid').innerHTML = '<div class="empty-state" style="grid-column:1/-1;">Weekend — clinic closed.</div>';
     document.getElementById('banner-stats').innerHTML = '';
     document.getElementById('plan-c-container').innerHTML = '';
+    document.getElementById('ooo-container').innerHTML = '';
     return;
   }
 
