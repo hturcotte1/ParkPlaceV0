@@ -982,6 +982,24 @@ function saveManualCoverage() {
   pushToCloud();
 }
 
+// AM/PM coverage picks for AM-only providers (e.g. Donovan on Fridays), so the
+// morning and afternoon coverage can each be selected independently.
+// amPmCoverage[dateKey][personName] = { am: coverer|'', pm: coverer|'' }
+const AMPM_COVERAGE_KEY = 'parkplace_ampm_coverage_v1';
+let amPmCoverage = {};
+function loadAmPmCoverage() {
+  try {
+    const raw = localStorage.getItem(AMPM_COVERAGE_KEY);
+    if (raw) amPmCoverage = JSON.parse(raw);
+  } catch (e) { amPmCoverage = {}; }
+}
+function saveAmPmCoverage() {
+  try {
+    localStorage.setItem(AMPM_COVERAGE_KEY, JSON.stringify(amPmCoverage));
+  } catch (e) {}
+  pushToCloud();
+}
+
 // attendanceByDate (the in/out toggle) — now persisted + synced
 const ATTENDANCE_KEY = 'parkplace_attendance_v1';
 function loadAttendance() {
@@ -1099,6 +1117,7 @@ function pushToCloud() {
       scheduledAbsences,
       supervisorSelections,
       manualCoverage,
+      amPmCoverage,
       attendanceByDate,
       reviewStatus,
       dayNotes,
@@ -1153,6 +1172,7 @@ function startCloudSync() {
       if (data.scheduledAbsences)     scheduledAbsences     = data.scheduledAbsences;
       if (data.supervisorSelections)  supervisorSelections  = data.supervisorSelections;
       if (data.manualCoverage)        manualCoverage        = data.manualCoverage;
+      if (data.amPmCoverage)          amPmCoverage          = data.amPmCoverage;
       if (data.attendanceByDate)      attendanceByDate      = data.attendanceByDate;
       if (data.reviewStatus)          reviewStatus          = data.reviewStatus;
       if (data.dayNotes)              dayNotes              = data.dayNotes;
@@ -1161,6 +1181,7 @@ function startCloudSync() {
       saveAbsences();
       saveSupervisorSelections();
       saveManualCoverage();
+      saveAmPmCoverage();
       saveAttendance();
       saveReviewStatus();
       saveDayNotes();
@@ -1175,6 +1196,7 @@ function startCloudSync() {
 loadAbsences();
 loadSupervisorSelections();
 loadManualCoverage();
+loadAmPmCoverage();
 loadAttendance();
 loadReviewStatus();
 loadDayNotes();
@@ -1503,6 +1525,18 @@ function findMemberByName(name) {
   for (const t of TEAMS) { const m = t.members.find(x => x.name === name); if (m) return m; }
   return null;
 }
+// First in-office APP on a buddy team who isn't already committed elsewhere.
+function availableBuddyAPP(teamId, date, excludeSet) {
+  for (const buddyId of buddyTeamsOf(teamId)) {
+    const bt = teamById(buddyId);
+    if (!bt) continue;
+    const app = bt.members.find(p =>
+      p.role === APP && !p.independent && isPersonIn(p, date) &&
+      !(excludeSet && excludeSet.has(p.name)));
+    if (app) return app;
+  }
+  return null;
+}
 // Resolve coverage for an independent member who is OUT, using their fixed
 // priority list (first available person in the office covers).
 function resolveIndependentCoverage(member, date, teamId) {
@@ -1671,11 +1705,14 @@ function computeCoverage(date) {
         // "Meier (AM) / Tanabe (PM)". If no one else is present, the PM reads
         // "supervisor" (and the gap is designated via the Plan C panel).
         if (isAmOnly(m, date)) {
+          const sel = (amPmCoverage[key] && amPmCoverage[key][m.name]) || {};
+          const amName = sel.am || m.name;  // default: covers their own AM
           const pmHolders = state.inMembers.filter(x =>
             x.name !== m.name && !isAmOnly(x, date));
-          const pm = pmHolders.length ? pmHolders.map(x => x.name).join('/') : 'supervisor';
+          const pmAuto = pmHolders.length ? pmHolders.map(x => x.name).join('/') : 'supervisor';
+          const pmName = sel.pm || pmAuto;
           coverage[m.name] = {
-            label: `${m.name} (AM) / ${pm} (PM)`,
+            label: `${amName} (AM) / ${pmName} (PM)`,
             type: 'self',
             teamId: team.id,
             amOnly: true,
@@ -1720,6 +1757,18 @@ function computeCoverage(date) {
               if (sortedNonPulledAPPs.length > 0) coverers = sortedNonPulledAPPs;
               else if (sortedInAPPs.length > 0) coverers = sortedInAPPs;
             }
+          } else if (team.id === 'T3' && dayOfWeekIndex(date) === 0) {
+            // Warm Springs, Monday, no APP present (Kelley out): a buddy-team APP
+            // (Fort's Carey) covers instead of the other in-team MD (Nelson). If no
+            // buddy APP is available, it falls through to the supervisor (Plan C).
+            const buddyAPP = availableBuddyAPP(team.id, date,
+              new Set([...manuallyOccupied, ...pulledAPPs]));
+            if (buddyAPP) {
+              coverage[m.name] = { label: `${buddyAPP.name} (buddy)`, type: 'plan-b', teamId: team.id };
+              continue;
+            }
+            if (!planCNeeded.includes(team.id)) planCNeeded.push(team.id);
+            // no buddy APP available → coverers stays empty → supervisor (Plan C)
           } else if (isMultiMDTeam && sortedInMDs.length > 0) {
             // APP absent, multi-MD team → other in-team MD covers
             coverers = sortedInMDs;
@@ -2002,6 +2051,41 @@ function renderDayView() {
               </select>
             </div>
           `;
+          // AM-only providers (e.g. Donovan on Fridays) get separate AM and PM
+          // coverage selectors so each half of the day can be assigned.
+          let coverSelectHTML = covByHTML;
+          if (isAmOnly(m, currentDate)) {
+            const ampmSel = (amPmCoverage[key] && amPmCoverage[key][m.name]) || {};
+            const selStyle = set => `font-size:0.68rem;border:1px solid var(--line-soft);border-radius:3px;padding:1px 3px;background:var(--surface);color:${set ? 'var(--plan-b)' : 'var(--ink-mute)'};`;
+            const amOpts = TEAMS.map(t =>
+              `<optgroup label="${t.name}">${t.members.filter(p => !p.independent).map(p =>
+                `<option value="${p.name}" ${ampmSel.am === p.name ? 'selected' : ''}>${p.name}</option>`
+              ).join('')}</optgroup>`
+            ).join('');
+            const pmOpts = TEAMS.map(t =>
+              `<optgroup label="${t.name}">${t.members.filter(p => !p.independent && !isAmOnly(p, currentDate)).map(p =>
+                `<option value="${p.name}" ${ampmSel.pm === p.name ? 'selected' : ''}>${p.name}</option>`
+              ).join('')}</optgroup>`
+            ).join('');
+            coverSelectHTML = `
+              <div style="margin-top:3px;display:flex;flex-direction:column;gap:2px;">
+                <div style="display:flex;align-items:center;gap:4px;">
+                  <span style="font-size:0.65rem;color:var(--ink-mute);min-width:24px;">AM:</span>
+                  <select style="${selStyle(ampmSel.am)}" onchange="setAmPmCoverage('${m.name}','am',this.value)">
+                    <option value="">auto (${m.name})</option>
+                    ${amOpts}
+                  </select>
+                </div>
+                <div style="display:flex;align-items:center;gap:4px;">
+                  <span style="font-size:0.65rem;color:var(--ink-mute);min-width:24px;">PM:</span>
+                  <select style="${selStyle(ampmSel.pm)}" onchange="setAmPmCoverage('${m.name}','pm',this.value)">
+                    <option value="">auto</option>
+                    ${pmOpts}
+                  </select>
+                </div>
+              </div>
+            `;
+          }
           return `
             <div class="member-row" style="flex-wrap:wrap;">
               <button class="toggle ${inOffice ? 'in' : 'out'}" onclick="toggleAttendance('${m.name}', currentDate)" title="${inOffice ? 'Mark out' : 'Mark in'}">${inOffice ? '✓' : ''}</button>
@@ -2009,7 +2093,7 @@ function renderDayView() {
                 <div class="member-name ${inOffice ? '' : 'out'}">${m.name}</div>
                 <div class="member-role">${m.degree || m.role}</div>
                 ${scheduledTag ? `<div class="ooo-line">${scheduledTag}</div>` : ''}
-                ${covByHTML}
+                ${coverSelectHTML}
               </div>
               ${chipHTML}
             </div>
@@ -2212,6 +2296,22 @@ function setManualCoverage(personName, covererName) {
   render();
 }
 
+// Pick the AM or PM coverer for an AM-only provider (slot = 'am' | 'pm').
+function setAmPmCoverage(personName, slot, covererName) {
+  const key = dateKey(currentDate);
+  if (!amPmCoverage[key]) amPmCoverage[key] = {};
+  if (!amPmCoverage[key][personName]) amPmCoverage[key][personName] = { am: '', pm: '' };
+  amPmCoverage[key][personName][slot] = covererName || '';
+  const entry = amPmCoverage[key][personName];
+  if (!entry.am && !entry.pm) {
+    delete amPmCoverage[key][personName];
+    if (Object.keys(amPmCoverage[key]).length === 0) delete amPmCoverage[key];
+  }
+  saveAmPmCoverage();
+  logEdit(key);
+  render();
+}
+
 // ---- Navigation ----
 function setView(v) {
   currentView = v;
@@ -2256,9 +2356,11 @@ function resetCurrent() {
   delete attendanceByDate[key];
   delete manualCoverage[key];
   delete supervisorSelections[key];
+  delete amPmCoverage[key];
   saveAttendance();
   saveManualCoverage();
   saveSupervisorSelections();
+  saveAmPmCoverage();
   logEdit(key);
   render();
 }
