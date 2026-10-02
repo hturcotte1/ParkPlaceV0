@@ -899,13 +899,13 @@ const TEAMS = [
     { name: 'Micah',   role: APP,  schedule: [1,1,0,1,1] },
   ]},
   { id: 'T7', name: 'Walnut', cls: 'team-t7', members: [
-    { name: 'Tanabe', role: PHYS, schedule: [0,1,1,1,1] },
-    { name: 'Meier',  role: PHYS, schedule: [1,0,1,1,1], amOnlyDays: [3] },
-    { name: 'Sorcha', role: APP,  schedule: [1,1,1,0,0] },
-    // Independent member: needs coverage (off Mon/Thu) but covers no one and is
-    // outside the team/buddy logic. Coverage is resolved by resolveIndependentCoverage().
-    { name: 'Jessica', role: APP, schedule: [0,1,1,0,1], independent: true,
-      coverPriority: ['Sorcha', 'Meier', 'Turcotte', 'Tanabe'] },
+    // Walnut runs as two pairs that each cover their own: Tanabe<->Sorcha and
+    // Meier<->Jessica. On Thursdays Meier works AM-only and Jessica PM-only, so the
+    // Meier/Jessica pair splits the day (Meier AM, Jessica PM).
+    { name: 'Tanabe', role: PHYS, schedule: [0,1,1,1,1], pair: 'Sorcha' },
+    { name: 'Meier',  role: PHYS, schedule: [1,0,1,1,1], amOnlyDays: [3], pair: 'Jessica' },
+    { name: 'Sorcha', role: APP,  schedule: [1,1,1,0,0], pair: 'Tanabe' },
+    { name: 'Jessica', role: APP, schedule: [0,1,0,1,1], pmOnlyDays: [3], pair: 'Meier' },
   ]},
 ];
 
@@ -1488,6 +1488,24 @@ function isAmOnly(person, date) {
   return di >= 0 && Array.isArray(person.amOnlyDays) && person.amOnlyDays.includes(di) && isPersonIn(person, date);
 }
 
+// PM-only providers (e.g. Jessica on Thursdays) are present for the afternoon
+// only; the mirror of isAmOnly.
+function isPmOnly(person, date) {
+  const di = dayOfWeekIndex(date);
+  return di >= 0 && Array.isArray(person.pmOnlyDays) && person.pmOnlyDays.includes(di) && isPersonIn(person, date);
+}
+
+// "Out" because of an actual absence — PTO or a manual mark-out — as opposed to
+// a regular scheduled day off. Used to relax strict pairing only when someone is
+// genuinely absent.
+function isOutByAbsence(member, date) {
+  const key = dateKey(date);
+  if (attendanceByDate[key] && member.name in attendanceByDate[key]) {
+    return attendanceByDate[key][member.name] === false;  // manually marked out
+  }
+  return isScheduledOut(member.name, key);  // PTO
+}
+
 function toggleAttendance(personName, date) {
   const key = dateKey(date);
   if (!attendanceByDate[key]) attendanceByDate[key] = {};
@@ -1536,6 +1554,13 @@ function availableBuddyAPP(teamId, date, excludeSet) {
     if (app) return app;
   }
   return null;
+}
+// The in-office partner of a paired provider (Walnut's Tanabe<->Sorcha,
+// Meier<->Jessica), or null if the partner isn't in today.
+function pairedInOffice(member, date) {
+  if (!member.pair) return null;
+  const p = findMemberByName(member.pair);
+  return (p && isPersonIn(p, date)) ? p : null;
 }
 // Resolve coverage for an independent member who is OUT, using their fixed
 // priority list (first available person in the office covers).
@@ -1672,18 +1697,59 @@ function computeCoverage(date) {
 
     const isMultiMDTeam = team.members.filter(m => m.role === PHYS).length > 1;
 
+    // True if any team member is genuinely absent today (PTO / marked out), as
+    // opposed to a regular scheduled day off. Relaxes strict pairing.
+    const teamHasAbsence = team.members.some(mm => isOutByAbsence(mm, date));
+
     // In-office members
     for (const m of state.inMembers) {
-      if (m.role === APP) {
+      if (isAmOnly(m, date)) {
+        // Morning-only (e.g. Meier Thu, Donovan Fri): "<AM> (AM) / <PM holder> (PM)".
+        // The PM holder prefers the paired partner (Meier -> Jessica), else the auto pick.
+        const sel = (amPmCoverage[key] && amPmCoverage[key][m.name]) || {};
+        const amName = sel.am || m.name;
+        const mate = pairedInOffice(m, date);
+        let pmAuto;
+        if (mate && !isAmOnly(mate, date)) pmAuto = mate.name;
+        else {
+          const h = state.inMembers.filter(x => x.name !== m.name && !isAmOnly(x, date));
+          pmAuto = h.length ? h.map(x => x.name).join('/') : 'supervisor';
+        }
+        const pmName = sel.pm || pmAuto;
+        coverage[m.name] = { label: `${amName} (AM) / ${pmName} (PM)`, type: 'self', teamId: team.id, amOnly: true };
+      } else if (isPmOnly(m, date)) {
+        // Afternoon-only (e.g. Jessica Thu): "<AM holder> (AM) / <PM> (PM)".
+        // The AM holder prefers the paired partner (Jessica -> Meier), else the auto pick.
+        const mate = pairedInOffice(m, date);
+        let amAuto;
+        if (mate && !isPmOnly(mate, date)) amAuto = mate.name;
+        else {
+          const h = state.inMembers.filter(x => x.name !== m.name && !isPmOnly(x, date));
+          amAuto = h.length ? h.map(x => x.name).join('/') : 'supervisor';
+        }
+        coverage[m.name] = { label: `${amAuto} (AM) / ${m.name} (PM)`, type: 'self', teamId: team.id, pmOnly: true };
+      } else if (m.role === APP) {
         coverage[m.name] = { label: m.name, type: 'self', teamId: team.id };
       } else {
-        // In-office MD
+        // In-office MD (full day)
         if (teamHasPTO || (buddyArriving && buddyArrivingPTOLoaded)) {
           // Same-team PTO narrowing or arriving buddy is PTO-loaded → self-cover
           coverage[m.name] = { label: m.name, type: 'self', teamId: team.id };
         } else {
           let coverers = [];
-          if (t4PairingActive && T4_PAIRS[m.name]) {
+          const mate = pairedInOffice(m, date);
+          if (m.pair) {
+            // Strict pairing (Walnut): the paired APP backs this MD; if the
+            // partner is off, the MD covers herself (e.g. Tanabe Thu/Fri, Meier
+            // Mon/Wed) — UNLESS someone is genuinely absent (PTO / marked out),
+            // in which case another available in-team APP covers her first
+            // (which also means no buddy APP needs to be pulled).
+            if (mate && mate.role === APP && availableForHomeInOffice.some(a => a.name === mate.name)) {
+              coverers = [mate];
+            } else if (teamHasAbsence && sortedAvailable.length > 0) {
+              coverers = sortedAvailable;
+            }
+          } else if (t4PairingActive && T4_PAIRS[m.name]) {
             const paired = availableForHomeInOffice.find(a => a.name === T4_PAIRS[m.name]);
             if (paired) coverers = [paired];
           } else {
@@ -1698,25 +1764,6 @@ function computeCoverage(date) {
           } else {
             coverage[m.name] = { label: m.name, type: 'self', teamId: team.id };
           }
-        }
-        // AM-only provider (e.g. Meier on Thu, Donovan on Fri): in the office for
-        // the morning only. Always spell out who holds the team in the afternoon:
-        // "<self> (AM) / <PM holder> (PM)" — e.g. "Donovan (AM) / Micah (PM)" or
-        // "Meier (AM) / Tanabe (PM)". If no one else is present, the PM reads
-        // "supervisor" (and the gap is designated via the Plan C panel).
-        if (isAmOnly(m, date)) {
-          const sel = (amPmCoverage[key] && amPmCoverage[key][m.name]) || {};
-          const amName = sel.am || m.name;  // default: covers their own AM
-          const pmHolders = state.inMembers.filter(x =>
-            x.name !== m.name && !isAmOnly(x, date));
-          const pmAuto = pmHolders.length ? pmHolders.map(x => x.name).join('/') : 'supervisor';
-          const pmName = sel.pm || pmAuto;
-          coverage[m.name] = {
-            label: `${amName} (AM) / ${pmName} (PM)`,
-            type: 'self',
-            teamId: team.id,
-            amOnly: true,
-          };
         }
       }
     }
@@ -1735,7 +1782,10 @@ function computeCoverage(date) {
 
         if (isPTO) {
           // PTO MD without buddy → home APP covers (we know the home APP is present, otherwise buddy would have been pulled)
-          if (team.id === 'T4' && T4_PAIRS[m.name]) {
+          const mate = pairedInOffice(m, date);
+          if (mate && mate.role === APP && inAPPs.some(a => a.name === mate.name)) {
+            coverers = [mate];  // prefer the paired APP
+          } else if (team.id === 'T4' && T4_PAIRS[m.name]) {
             const paired = inAPPs.find(a => a.name === T4_PAIRS[m.name]);
             if (paired) coverers = [paired];
           }
@@ -1749,7 +1799,10 @@ function computeCoverage(date) {
           // - APP absent + multi-MD team: other in-team MD covers
           // - APP absent + single-MD team: shouldn't reach here (would be fully empty)
           if (inAPPs.length > 0) {
-            if (team.id === 'T4' && T4_PAIRS[m.name]) {
+            const mate = pairedInOffice(m, date);
+            if (mate && mate.role === APP && inAPPs.some(a => a.name === mate.name)) {
+              coverers = [mate];  // prefer the paired APP (Meier -> Jessica, Tanabe -> Sorcha)
+            } else if (team.id === 'T4' && T4_PAIRS[m.name]) {
               const paired = inAPPs.find(a => a.name === T4_PAIRS[m.name]);
               if (paired) coverers = [paired];
             }
@@ -1796,7 +1849,10 @@ function computeCoverage(date) {
           }
         } else {
           // MD(s) cover
-          if (sortedInMDs.length > 0) {
+          const mate = pairedInOffice(m, date);
+          if (mate && mate.role === PHYS && inMDs.some(md => md.name === mate.name)) {
+            coverers = [mate];  // prefer the paired MD (Sorcha -> Tanabe, Jessica -> Meier)
+          } else if (sortedInMDs.length > 0) {
             coverers = sortedInMDs;
           } else {
             const otherAPPs = inAPPs.filter(a => a.name !== m.name);
@@ -1931,7 +1987,7 @@ function renderDayView() {
       for (const m of t.members) {
         if (m.independent) continue;  // independent members cover no one
         if (!isPersonIn(m, currentDate)) continue;
-        if (isAmOnly(m, currentDate)) continue;  // AM-only providers can't cover the afternoon
+        if (isAmOnly(m, currentDate) || isPmOnly(m, currentDate)) continue;  // half-day providers can't be a full-day designated coverer
         if (m.role === APP) inAPPsAll.push({ ...m, teamName: t.name });
         else inMDsAll.push({ ...m, teamName: t.name });
       }
@@ -2058,7 +2114,7 @@ function renderDayView() {
             const ampmSel = (amPmCoverage[key] && amPmCoverage[key][m.name]) || {};
             const selStyle = set => `font-size:0.68rem;border:1px solid var(--line-soft);border-radius:3px;padding:1px 3px;background:var(--surface);color:${set ? 'var(--plan-b)' : 'var(--ink-mute)'};`;
             const amOpts = TEAMS.map(t =>
-              `<optgroup label="${t.name}">${t.members.filter(p => !p.independent).map(p =>
+              `<optgroup label="${t.name}">${t.members.filter(p => !p.independent && !isPmOnly(p, currentDate)).map(p =>
                 `<option value="${p.name}" ${ampmSel.am === p.name ? 'selected' : ''}>${p.name}</option>`
               ).join('')}</optgroup>`
             ).join('');
