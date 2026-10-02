@@ -903,8 +903,8 @@ const TEAMS = [
     // Meier<->Jessica. On Thursdays Meier works AM-only and Jessica PM-only, so the
     // Meier/Jessica pair splits the day (Meier AM, Jessica PM).
     { name: 'Tanabe', role: PHYS, schedule: [0,1,1,1,1], pair: 'Sorcha' },
-    { name: 'Meier',  role: PHYS, schedule: [1,0,1,1,1], amOnlyDays: [3], pair: 'Jessica' },
     { name: 'Sorcha', role: APP,  schedule: [1,1,1,0,0], pair: 'Tanabe' },
+    { name: 'Meier',  role: PHYS, schedule: [1,0,1,1,1], amOnlyDays: [3], pair: 'Jessica' },
     { name: 'Jessica', role: APP, schedule: [0,1,0,1,1], pmOnlyDays: [3], pair: 'Meier' },
   ]},
 ];
@@ -1697,10 +1697,6 @@ function computeCoverage(date) {
 
     const isMultiMDTeam = team.members.filter(m => m.role === PHYS).length > 1;
 
-    // True if any team member is genuinely absent today (PTO / marked out), as
-    // opposed to a regular scheduled day off. Relaxes strict pairing.
-    const teamHasAbsence = team.members.some(mm => isOutByAbsence(mm, date));
-
     // In-office members
     for (const m of state.inMembers) {
       if (isAmOnly(m, date)) {
@@ -1740,14 +1736,18 @@ function computeCoverage(date) {
           const mate = pairedInOffice(m, date);
           if (m.pair) {
             // Strict pairing (Walnut): the paired APP backs this MD; if the
-            // partner is off, the MD covers herself (e.g. Tanabe Thu/Fri, Meier
-            // Mon/Wed) — UNLESS someone is genuinely absent (PTO / marked out),
-            // in which case another available in-team APP covers her first
-            // (which also means no buddy APP needs to be pulled).
+            // partner is off the MD covers herself (e.g. Tanabe Thu/Fri, Meier
+            // Mon/Wed). Exception: if her OWN partner is genuinely absent (PTO /
+            // marked out — not a regular day off), another available in-team APP
+            // covers her first (so no buddy APP is pulled). A teammate's absence
+            // in the OTHER pair does not pull an APP off her own partner.
             if (mate && mate.role === APP && availableForHomeInOffice.some(a => a.name === mate.name)) {
               coverers = [mate];
-            } else if (teamHasAbsence && sortedAvailable.length > 0) {
-              coverers = sortedAvailable;
+            } else {
+              const pairMember = findMemberByName(m.pair);
+              if (pairMember && isOutByAbsence(pairMember, date) && sortedAvailable.length > 0) {
+                coverers = sortedAvailable;
+              }
             }
           } else if (t4PairingActive && T4_PAIRS[m.name]) {
             const paired = availableForHomeInOffice.find(a => a.name === T4_PAIRS[m.name]);
