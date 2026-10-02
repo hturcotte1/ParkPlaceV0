@@ -1723,8 +1723,13 @@ function computeCoverage(date) {
         } else {
           let coverers = [];
           const mate = pairedInOffice(m, date);
-          if (mate && mate.role === APP && availableForHomeInOffice.some(a => a.name === mate.name)) {
-            coverers = [mate];  // prefer the paired APP (Tanabe -> Sorcha, Meier -> Jessica)
+          if (m.pair) {
+            // Strict pairing (Walnut): the paired APP backs this MD; if the
+            // partner is off, the MD covers herself rather than borrowing the
+            // other pair's APP (e.g. Tanabe on Thu/Fri, Meier on Mon/Wed).
+            if (mate && mate.role === APP && availableForHomeInOffice.some(a => a.name === mate.name)) {
+              coverers = [mate];
+            }
           } else if (t4PairingActive && T4_PAIRS[m.name]) {
             const paired = availableForHomeInOffice.find(a => a.name === T4_PAIRS[m.name]);
             if (paired) coverers = [paired];
