@@ -2137,11 +2137,12 @@ function renderDayView() {
           // "Covered by" manual override dropdown — available for every provider
           const manualCoverer = manualDay[m.name] || '';
           // Build options: all providers from all teams except this person
-          const allProviderOpts = TEAMS.map(t =>
-            `<optgroup label="${t.name}">${t.members.filter(p => !p.independent).map(p =>
+          const allProviderOpts = TEAMS.map(t => {
+            const opts = t.members.filter(p => !p.independent).map(p =>
               `<option value="${p.name}" ${manualCoverer === p.name ? 'selected' : ''}>${p.name}</option>`
-            ).join('')}</optgroup>`
-          ).join('');
+            ).join('');
+            return opts ? `<optgroup label="${t.name}">${opts}</optgroup>` : '';
+          }).join('');
           const covByHTML = `
             <div style="margin-top:3px;display:flex;align-items:center;gap:4px;">
               <span style="font-size:0.65rem;color:var(--ink-mute);">Covered by:</span>
@@ -2157,16 +2158,18 @@ function renderDayView() {
           if (isAmOnly(m, currentDate)) {
             const ampmSel = (amPmCoverage[key] && amPmCoverage[key][m.name]) || {};
             const selStyle = set => `font-size:0.68rem;border:1px solid var(--line-soft);border-radius:3px;padding:1px 3px;background:var(--surface);color:${set ? 'var(--plan-b)' : 'var(--ink-mute)'};`;
-            const amOpts = TEAMS.map(t =>
-              `<optgroup label="${t.name}">${t.members.filter(p => !p.independent && !isPmOnly(p, currentDate)).map(p =>
+            const amOpts = TEAMS.map(t => {
+              const opts = t.members.filter(p => !p.independent && !isPmOnly(p, currentDate)).map(p =>
                 `<option value="${p.name}" ${ampmSel.am === p.name ? 'selected' : ''}>${p.name}</option>`
-              ).join('')}</optgroup>`
-            ).join('');
-            const pmOpts = TEAMS.map(t =>
-              `<optgroup label="${t.name}">${t.members.filter(p => !p.independent && !isAmOnly(p, currentDate)).map(p =>
+              ).join('');
+              return opts ? `<optgroup label="${t.name}">${opts}</optgroup>` : '';
+            }).join('');
+            const pmOpts = TEAMS.map(t => {
+              const opts = t.members.filter(p => !p.independent && !isAmOnly(p, currentDate)).map(p =>
                 `<option value="${p.name}" ${ampmSel.pm === p.name ? 'selected' : ''}>${p.name}</option>`
-              ).join('')}</optgroup>`
-            ).join('');
+              ).join('');
+              return opts ? `<optgroup label="${t.name}">${opts}</optgroup>` : '';
+            }).join('');
             coverSelectHTML = `
               <div style="margin-top:3px;display:flex;flex-direction:column;gap:2px;">
                 <div style="display:flex;align-items:center;gap:4px;">
