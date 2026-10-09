@@ -35,6 +35,7 @@
     --t5: #B45309; --t5-soft: #FEF3C7;
     --t6: #BE185D; --t6-soft: #FCE7F3;
     --t7: #0F766E; --t7-soft: #CCFBF1;
+    --t8: #64748B; --t8-soft: #E2E8F0;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { font-size: 15px; }
@@ -299,6 +300,7 @@
   .team-t5 .team-band { background: var(--t5); }
   .team-t6 .team-band { background: var(--t6); }
   .team-t7 .team-band { background: var(--t7); }
+  .team-t8 .team-band { background: var(--t8); }
   .team-status-chip {
     background: rgba(255,255,255,0.22);
     padding: 3px 9px;
@@ -416,6 +418,7 @@
   .weekly-table tr.team-t5 .team-label { background: var(--t5); }
   .weekly-table tr.team-t6 .team-label { background: var(--t6); }
   .weekly-table tr.team-t7 .team-label { background: var(--t7); }
+  .weekly-table tr.team-t8 .team-label { background: var(--t8); }
   .weekly-table tr.team-t1 td:not(.team-label) { background: color-mix(in srgb, var(--t1-soft) 60%, white); }
   .weekly-table tr.team-t2 td:not(.team-label) { background: color-mix(in srgb, var(--t2-soft) 60%, white); }
   .weekly-table tr.team-t3 td:not(.team-label) { background: color-mix(in srgb, var(--t3-soft) 60%, white); }
@@ -423,6 +426,7 @@
   .weekly-table tr.team-t5 td:not(.team-label) { background: color-mix(in srgb, var(--t5-soft) 60%, white); }
   .weekly-table tr.team-t6 td:not(.team-label) { background: color-mix(in srgb, var(--t6-soft) 60%, white); }
   .weekly-table tr.team-t7 td:not(.team-label) { background: color-mix(in srgb, var(--t7-soft) 60%, white); }
+  .weekly-table tr.team-t8 td:not(.team-label) { background: color-mix(in srgb, var(--t8-soft) 60%, white); }
   .week-cell { font-size: 0.78rem; }
   .week-cell .person-line {
     display: flex;
@@ -925,6 +929,13 @@ const TEAMS = [
     { name: 'Sorcha', role: APP,  schedule: [1,1,1,0,0], pair: 'Tanabe' },
     { name: 'Meier',  role: PHYS, schedule: [1,0,1,1,1], amOnlyDays: [3], pair: 'Jessica' },
     { name: 'Jessica', role: APP, schedule: [0,1,0,1,1], pmOnlyDays: [3], pair: 'Meier' },
+  ]},
+  // Stand-alone off-site provider (The Terraces). Not a coverage team: she covers
+  // no one and is excluded from team stats/buddy logic. We only cover her when she
+  // is out, via her coverPriority (Jessica -> Meier -> Schell -> supervisor).
+  { id: 'T8', name: 'Terraces', cls: 'team-t8', standalone: true, members: [
+    { name: 'Jennifer', role: APP, schedule: [0,1,1,0,1], independent: true,
+      coverPriority: ['Jessica', 'Meier', 'Schell'] },
   ]},
 ];
 
@@ -1595,6 +1606,15 @@ function resolveIndependentCoverage(member, date, teamId) {
     const pm = order.slice(order.indexOf(avail[0]) + 1).find(isAvail);
     return { label: `${avail[0]} (AM) / ${pm || 'supervisor'} (PM)`, type: 'plan-a', teamId };
   }
+  // If the lead coverer is PM-only today (e.g. Jessica on Thu), they take PM and the
+  // next available person who can work the morning takes AM.
+  if (lead && isPmOnly(lead, date)) {
+    const am = order.slice(order.indexOf(avail[0]) + 1).find(n => {
+      const mm = findMemberByName(n);
+      return mm && isPersonIn(mm, date) && !isPmOnly(mm, date);
+    });
+    return { label: `${am || 'supervisor'} (AM) / ${avail[0]} (PM)`, type: 'plan-a', teamId };
+  }
   return { label: avail[0], type: 'plan-a', teamId };
 }
 
@@ -1611,6 +1631,7 @@ function computeCoverage(date) {
   // Pass 1: classify each team based on raw in/out
   const teamState = {};
   for (const team of TEAMS) {
+    if (team.standalone) continue;  // Terraces is not a coverage team
     teamState[team.id] = classifyTeam(team, date);
   }
 
@@ -1621,6 +1642,7 @@ function computeCoverage(date) {
   const planCNeeded = [];
 
   for (const team of TEAMS) {
+    if (team.standalone) continue;
     const state = teamState[team.id];
     const teamAPPsIn = state.inMembers.filter(m => m.role === APP);
     const teamAPPAbsent = teamAPPsIn.length === 0;
@@ -1670,6 +1692,7 @@ function computeCoverage(date) {
   const coverage = {};
 
   for (const team of TEAMS) {
+    if (team.standalone) continue;
     const state = teamState[team.id];
     const buddyArriving = planBCoverer[team.id] ? planBCoverer[team.id].coverer : null;
     const buddyArrivingPTOLoaded = buddyArriving ? pulledAPPMeta[buddyArriving.name].ptoLoaded : false;
@@ -1985,6 +2008,7 @@ function renderDayView() {
   // Stats
   let countFull = 0, countNoApp = 0, countNoMd = 0, countEmpty = 0;
   for (const team of TEAMS) {
+    if (team.standalone) continue;  // Terraces is not a coverage team
     const s = teamState[team.id].status;
     if (s === 'full') countFull++;
     else if (s === 'no-app') countNoApp++;
@@ -2067,8 +2091,9 @@ function renderDayView() {
   const grid = document.getElementById('team-grid');
   grid.innerHTML = '';
   for (const team of TEAMS) {
+    const isStandalone = !!team.standalone;
     const state = teamState[team.id];
-    const statusLabel = {
+    const statusLabel = isStandalone ? 'Off-site' : {
       'full': 'Full team',
       'no-app': 'No APP',
       'no-md': 'No MD',
@@ -2078,7 +2103,7 @@ function renderDayView() {
     const card = document.createElement('div');
     card.className = `team-card ${team.cls}`;
 
-    const buddies = buddyTeamsOf(team.id).map(b => teamById(b).name).join(' + ');
+    const buddies = isStandalone ? '' : buddyTeamsOf(team.id).map(b => teamById(b).name).join(' + ');
 
     // Options for the "pull to" select: all teams except this one
     const otherTeamOpts = TEAMS.filter(t => t.id !== team.id)
@@ -2175,7 +2200,9 @@ function renderDayView() {
           `;
         }).join('')}
       </div>
-      ${state.status !== 'empty' ? `<div style="padding:8px 14px;font-size:0.72rem;color:var(--ink-mute);border-top:1px solid var(--line-soft);">Buddy: ${buddies}</div>` : `<div style="padding:8px 14px;font-size:0.72rem;color:var(--plan-b);border-top:1px solid var(--line-soft);font-weight:500;">Plan B: ${buddies}</div>`}
+      ${isStandalone
+        ? `<div style="padding:8px 14px;font-size:0.72rem;color:var(--ink-mute);border-top:1px solid var(--line-soft);">Off-site — covered when out: Jessica, then Meier/Schell.</div>`
+        : (state.status !== 'empty' ? `<div style="padding:8px 14px;font-size:0.72rem;color:var(--ink-mute);border-top:1px solid var(--line-soft);">Buddy: ${buddies}</div>` : `<div style="padding:8px 14px;font-size:0.72rem;color:var(--plan-b);border-top:1px solid var(--line-soft);font-weight:500;">Plan B: ${buddies}</div>`)}
     `;
     grid.appendChild(card);
   }
