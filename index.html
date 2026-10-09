@@ -506,6 +506,14 @@
     line-height: 1;
   }
   .modal-body { padding: 18px 20px; overflow-y: auto; }
+  /* ROUTINE SCHEDULES TABLE */
+  .sched-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  .sched-table th, .sched-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); }
+  .sched-table th { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-mute); font-weight: 700; }
+  .sched-table tr.sched-team-row td { background: var(--line-soft); font-weight: 700; font-size: 0.78rem; color: var(--ink-soft); padding-top: 9px; padding-bottom: 5px; }
+  .sched-table .sched-name { font-weight: 600; }
+  .sched-table .sched-role { font-size: 0.72rem; color: var(--ink-mute); }
+  .sched-table .sched-off { color: var(--ink-mute); }
   .absence-form {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr 1fr auto;
@@ -773,6 +781,7 @@
     Scheduled absences
     <span class="absence-count" id="absence-count">0</span>
   </button>
+  <button class="today-btn" onclick="openSchedules()" title="Everyone's routine weekly schedule">Schedules</button>
   <div class="view-toggle">
     <button id="view-day-btn" class="active" onclick="setView('day')">Day</button>
     <button id="view-week-btn" onclick="setView('week')">Week</button>
@@ -856,6 +865,16 @@
       <div class="absences-list" id="absences-list"></div>
       <button class="clear-all" onclick="clearAllAbsences()">Clear all</button>
     </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="schedules-modal" onclick="closeSchedulesIfOverlay(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2>Routine schedules</h2>
+      <button class="modal-close" onclick="closeSchedules()">×</button>
+    </div>
+    <div class="modal-body" id="schedules-body"></div>
   </div>
 </div>
 
@@ -2255,6 +2274,53 @@ function closeAbsences() {
 }
 function closeAbsencesIfOverlay(ev) {
   if (ev.target === ev.currentTarget) closeAbsences();
+}
+
+// ---- Routine schedules (read-only view of everyone's weekly pattern) ----
+const SCHED_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+function renderSchedulesTable() {
+  const body = document.getElementById('schedules-body');
+  if (!body) return;
+  let rows = '';
+  for (const team of TEAMS) {
+    rows += `<tr class="sched-team-row"><td colspan="4">${team.name}</td></tr>`;
+    for (const m of team.members) {
+      const works = [], off = [];
+      for (let di = 0; di < 5; di++) {
+        const d = SCHED_DAYS[di];
+        if (m.schedule[di] === 1) {
+          const am = Array.isArray(m.amOnlyDays) && m.amOnlyDays.includes(di);
+          const pm = Array.isArray(m.pmOnlyDays) && m.pmOnlyDays.includes(di);
+          if (am)      { works.push(`${d} (AM)`); off.push(`${d} (PM)`); }
+          else if (pm) { works.push(`${d} (PM)`); off.push(`${d} (AM)`); }
+          else         { works.push(d); }
+        } else {
+          off.push(d);
+        }
+      }
+      rows += `<tr>
+        <td class="sched-name">${m.name}</td>
+        <td class="sched-role">${m.degree || m.role}</td>
+        <td>${works.join(', ') || '—'}</td>
+        <td class="sched-off">${off.join(', ') || '—'}</td>
+      </tr>`;
+    }
+  }
+  body.innerHTML = `
+    <table class="sched-table">
+      <thead><tr><th>Name</th><th>Role</th><th>Works</th><th>Days off</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+function openSchedules() {
+  renderSchedulesTable();
+  document.getElementById('schedules-modal').classList.add('open');
+}
+function closeSchedules() {
+  document.getElementById('schedules-modal').classList.remove('open');
+}
+function closeSchedulesIfOverlay(ev) {
+  if (ev.target === ev.currentTarget) closeSchedules();
 }
 function addAbsence() {
   const person = document.getElementById('abs-person').value;
